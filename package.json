@@ -1,6 +1,6 @@
 {
-  "name": "spambot",
-  "version": "1.0.10",
+  "name": "spambot-cli",
+  "version": “1.0.0”,
   "license": "MIT",
   "engines": {
     "node": ">=6.0"
