@@ -1,0 +1,191 @@
+#!/usr/bin/env node
+
+var _ = require('underscore');
+var fse = require('fs-extra');
+var path = require('path');
+var nop = require('nop');
+var Command = require('commander').Command;
+var sleep = require('sleep');
+
+var WordPressAttacker = require('../src/attacker').WordPressAttacker;
+var Freeproxylist = require('../src/proxy').Freeproxylist;
+var Logger = require('../src/utils/logger');
+var Utils = require('../src/utils/utils');
+var Sentence = require('../src/utils/sentence');
+var VERSION = require('../package.json').version;
+
+/**
+ * Examples of spambot command line.
+ *
+ * spmabot -h --help
+ * spambot -V --version
+ * spambot spam <site> -i --interval -v --verbose -d --dirty -m --message
+ * spambot search <site>
+ * spambot proxy -n
+ */
+
+var program = new Command();
+var logger = new Logger();
+var spamCounter = 0;
+var start = new Date();
+var attacker;
+
+var proxyJsonFile = path.join(__dirname, './proxies.json');
+var proxyOptions = {isHttps: 'yes'};
+var proxylist = new Freeproxylist(proxyOptions, logger);
+
+// Automatically update proxy list after start.
+proxylist.setUpdateProxyInterval(10000, 10, function() {
+  fse.outputJsonSync(proxyJsonFile, proxylist.proxy_list);
+});
+
+// Import cached proxies from JSON file.
+if(fse.ensureFileSync(proxyJsonFile)) {
+  var proxies = fse.readJsonSync(proxyJsonFile);
+  if(proxies) proxylist.proxy_list = proxies;
+}
+
+program.version('v' + VERSION);
+
+program
+  .command('proxy')
+  .description('Get a list of free proxies')
+  .option('-n --number <number>', 'Maximum number of proxies to return')
+  // .option('-u --update', 'Constantly update the available proxy list')
+  .action(function(options) {
+    var n = options.number || 10;
+    proxylist.gatherWorkingProxies({}, n, function(proxies) {
+      if(proxies.length === 0) {
+        logger.warn('Cannot find any proxy at the moment, please try it one more time.');
+      }
+      for(var i=0; i<proxies.length; i++) {
+        var proxy = proxies[i];
+        logger.info(proxy.ipAddress + ':' + proxy.port);
+      }
+
+      // Exit immediately after get all article urls.
+      process.exit(0);
+
+    });
+  });
+
+program
+  .command('search <site>')
+  .description('Search all articles under WordPress blog')
+  .action(function(site, options) {
+    var url = 'http://' + site;
+    attacker = new WordPressAttacker(url, {}, logger);
+    attacker.isWordPress().then(function(isWordPress) {
+      if(!isWordPress) {
+        logger.error('Not a valid wordpress site, exit...');
+        process.exit(0);
+      }
+    }).done();
+
+    // Print out all article urls in the blog.
+    attacker.getArticles().then(function(articles) {
+      if(articles.length === 0) {
+        logger.info('No article found in this blog.');
+      }
+
+      articles.forEach(function(article, index) {
+        logger.info('(' + (index + 1) + ') ' + article);
+      });
+
+      // Exit immediately after get all article urls.
+      process.exit(0);
+
+    }).done();
+  });
+
+program
+  .command('spam <site>')
+  .description('Spam a WordPress blog with comments')
+  .option('-i --interval <time>', 'Time interval to send comment in millisec')
+  .option('-v --verbose', 'Print out detailed spam logs')
+  .option('-d --dirty', 'Use dirty words or not in comments')
+  .option('-m --message', 'Specify the message in comment')
+  .action(function(site, options) {
+
+    var url = 'http://' + site;
+    attacker = new WordPressAttacker(url, {}, logger);
+    // Don't send it too fast, otherwise will activate anti-spam mechanism.
+    var interval = options.interval || 25000;
+    if(interval < 25000) interval = 25000;
+
+    function sendComment() {
+      // Break if proxy list is empty and wait util next interval.
+      var proxies = _.values(proxylist.proxy_list);
+      if(proxies.length === 0) {
+        logger.warn('Wait to update latest proxy list...');
+        return;
+      }
+
+      var email = Utils.fakeEmail();
+      var user = Utils.fakeUsername();
+      var comment = 'bullshit';
+      var proxy = _.sample(proxies);
+
+      // Construct comment according to options.
+      if(options.message) {
+        comment = options.message;
+      }
+      else if(options.dirty) {
+        var code = Sentence.getCodeByIP(proxy.ipAddress);
+        comment = Sentence.getNaughtySentenceByCode(10, code);
+        comment += ' with ID ' + Utils.randomString(10);
+      }
+      else {
+        comment = Utils.randomString(100);
+      }
+
+      logger.info('Trying to send a spam comment...');
+
+      // It does not use built-in driver, instead it generates a new driver everytime.
+      attacker.sendComment(email, user, comment, proxy).then(function(success) {
+        if(success) {
+          spamCounter++;
+          logger.info(`Spam sent with IP address: ${proxy.ipAddress}!`);
+          if(options.verbose) logger.info(email + '\n' + user + '\n' + comment + '\n');
+        }
+        else {
+          logger.error('Failed to send a spam comment!');
+        }
+      }, function(err) {
+        // Deal with any other errors occurred in the chain of promises.
+        logger.error('Failed to send a spam comment!');
+      }).done();
+    }
+
+    sendComment();
+    setInterval(sendComment, interval);
+
+  });
+
+program.parse(process.argv);
+
+// Print out help information when no arguments detected.
+if (!program.args.length) program.help();
+
+
+/**
+ * Exit handler before exit.
+ * Close webdriver and clean out proxy update interval.
+ * Print out spam statistics.
+ */
+function exitHandler() {
+  if(attacker) attacker.quit();
+  proxylist.clearUpdateProxyInterval();
+  var end = new Date();
+  var time = Math.floor((end.getTime() - start.getTime())/1000);
+  var h = Math.floor(time / 3600);
+  var m = Math.floor(time / 60) % 60;
+  var s = time % 60;
+  if(spamCounter !== 0) {
+    logger.info(`Sent ${spamCounter} spam comments in ${h} hour(s) ${m} minute(s) ${s} second(s).`);
+  }
+  process.exit(0);
+}
+
+// Clear up before CTRL-C is issued.
+process.on('SIGINT', exitHandler);
