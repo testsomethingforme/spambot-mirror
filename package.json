@@ -1,6 +1,6 @@
 {
-  "name": "spambot-cli",
-  "version": "1.0.0",
+  "name": "spambot",
+  "version": "1.0.11",
   "license": "MIT",
   "engines": {
     "node": ">=6.0"
@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node app.js",
     "test": "node node_modules/mocha/bin/mocha test/*.js",
-    "test-one": "node node_modules/mocha/bin/mocha test/wp-attacker.spec.js"
+    "test-wp-attacker": "node node_modules/mocha/bin/mocha test/wp-attacker.spec.js",
+    "postinstall": "node bin/install.js"
   },
   "dependencies": {
     "async": "^2.1.5",
@@ -29,7 +30,6 @@
     "randomstring": "^1.1.5",
     "request": "^2.81.0",
     "selenium-webdriver": "^3.3.0",
-    "sleep": "^5.1.0",
     "underscore": "^1.8.3"
   },
   "devDependencies": {

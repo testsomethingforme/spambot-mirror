@@ -1,5 +1,6 @@
 'use strict'
 
+var _ = require('underscore');
 var Q = require('q');
 var assert = require('chai').assert;
 var FreeListProxy = require('../src/proxy/freeproxylist');
@@ -12,6 +13,23 @@ var options = {};
 var testblog = 'http://testsomethingforme.wordpress.com';
 var attacker = new Attacker(testblog, {}, logger);
 var proxyManager = new FreeListProxy(options, logger);
+
+
+/**
+ * Turn async function to Promise for consistency.
+ *
+ * @return {promise} Thenable<proxies>
+ */
+function getProxyPromise() {
+  var deferred = Q.defer();
+  proxyManager.gatherWorkingProxies(options, 10, function(proxies) {
+    if(proxies.length === 0 || proxies == null)
+      deferred.reject(new Error('Failed to find any working proxies to test webdriver.'));
+    else
+      deferred.resolve(proxies);
+  });
+  return deferred.promise;
+}
 
 /**
  * Warning: Test cases will fail sometimes because the proxy is not stable or
@@ -46,18 +64,6 @@ describe('Test WordPress attacker script', function() {
     // Must support HTTPS, otherwise fail to establish secure tunnel connection.
     var options = {isHttps: 'yes'};
 
-    // Turn async function to Promise for consistency.
-    function getProxyPromise() {
-      var deferred = Q.defer();
-      proxyManager.gatherWorkingProxies(options, 10, function(proxies) {
-        if(proxies.length === 0 || proxies == null)
-          deferred.reject(new Error('Failed to find any working proxies to test webdriver.'));
-        else
-          deferred.resolve(proxies);
-      });
-      return deferred.promise;
-    }
-
     var promise = getProxyPromise().then(function(proxies) {
       var proxy = proxies[0];
       attacker.switchProxy(proxy);
@@ -73,7 +79,7 @@ describe('Test WordPress attacker script', function() {
   });
 
   // Proxy from previous test case is not cleaned out yet.
-  it('Should successfully send a comment to blog article without login', function() {
+  it('Should successfully send a comment to blog article using proxy without login', function() {
     this.timeout(30000); // Super slow sometimes.
 
     var email = 'testsomethingforme@gmail.com';
@@ -81,9 +87,15 @@ describe('Test WordPress attacker script', function() {
     // Duplicate comment is blocked on WordPress.
     var comment = 'I am testsomethingforme with ID ' + Utils.randomString(10) + ' and hope you pass my test.';
 
-    return attacker.sendComment(email, user, comment).then(function(success) {
-      assert.equal(success, true);
+    var promise = getProxyPromise().then(function(proxies) {
+      assert.isAbove(proxies.length, 0);
+      var proxy = _.sample(proxies);
+      return attacker.sendComment(email, user, comment, proxy).then(function(success) {
+        assert.equal(success, true);
+      });
     });
+
+    return promise;
   });
 
   // TODO

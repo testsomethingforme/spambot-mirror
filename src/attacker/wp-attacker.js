@@ -5,6 +5,8 @@ var Q = require('q');
 var _ = require('underscore');
 var cheerio = require('cheerio');
 var request = require('request');
+var fs = require('fs');
+var path = require('path');
 var nop = require('nop');
 var proxyConfig = require('selenium-webdriver/proxy');
 var webdriver = require('selenium-webdriver');
@@ -30,20 +32,28 @@ var wpAttacker = function(url, options, logger) {
 
 /**
  * Build webdriver instance with optional proxy and return
- * a promise at the end.
+ * a promise at the end. If we use chrome webdriver to send request,
+ * it may switch to direct connection when proxy connection is not
+ * stable or lost, thus reveal the real ip address. Recommend to use
+ * Phantomjs as it makes direction connection when proxy is present.
+ *
  * @param  {object} options
  * @return {promise}
  */
 wpAttacker.prototype._build = function(options) {
-  var driver = new webdriver.Builder().forBrowser('chrome');
+  var webdriverType = options.webdriver || 'phantomjs'
+  var builder = new webdriver.Builder().forBrowser(webdriverType);
   if(options.proxy) {
+    // this.logger.info(options.proxy.ipAddress);
     var url = options.proxy.ipAddress + ':' + options.proxy.port;
-    driver.setProxy(proxyConfig.manual({
+    builder.setProxy(proxyConfig.manual({
       https: url,
       http: url
     }));
   }
-  return driver.build();
+  var driver = builder.build();
+  driver.manage().window().setSize(1280, 1024);
+  return driver;
 };
 
 /**
@@ -95,7 +105,10 @@ wpAttacker.prototype.switchProxy = function(proxy) {
  * @return {webDriver}
  */
 wpAttacker.prototype.spawnDriver = function(proxy) {
-  var options = _.extend(this.options, {proxy: proxy});
+  var options = {};
+  if(proxy && proxy.ipAddress && proxy.port) {
+    options = _.extend(this.options, {proxy: proxy});
+  }
   return this._build(options);
 }
 
@@ -202,18 +215,28 @@ wpAttacker.prototype.sendComment = function(email, user, comment, proxy) {
       process.exit(0);
     }
 
+    // Use to debug and print out swallowed errors.
+    // nop = function(err) { self.logger.error(err.toString()); }
+
     // Spawn a new driver for each new comment.
     var driver = self.spawnDriver(proxy || {});
 
     // Use errorHandler or nop to swallow errors and continue, in order to avoid interruption.
-    driver.get(article).then(null, nop);
-    driver.findElement(By.id('comment')).sendKeys(comment).then(null, nop);
-    driver.findElement(By.id('email')).sendKeys(email).then(null, nop);
-    driver.findElement(By.id('author')).sendKeys(user).then(null, nop);
+    driver.get(article).then(function() {
+      driver.getPageSource().then(function(page) {
+        // self.logger.info(page);
+      });
+    }, nop);
 
-    // Element may have different id in different wordpress blog.
-    driver.findElement(By.id('comment-submit')).click().then(null, nop);
-    driver.findElement(By.id('submit')).click().then(null, nop);
+    driver.wait(Until.elementLocated(By.id('comment')), 10000).then(function(ele) {
+      driver.findElement(By.id('comment')).sendKeys(comment).then(null, nop);
+      driver.findElement(By.id('email')).sendKeys(email).then(null, nop);
+      driver.findElement(By.id('author')).sendKeys(user).then(null, nop);
+
+      // Element may have different id in different wordpress blog.
+      driver.findElement(By.id('comment-submit')).click().then(null, nop);
+      driver.findElement(By.id('submit')).click().then(null, nop);
+    });
 
     // Return a Thenable<Condition> promise when comment becomes blank
     // after submission within 10s timeout.
@@ -234,5 +257,20 @@ wpAttacker.prototype.sendComment = function(email, user, comment, proxy) {
 
   return conditionPromise;
 };
+
+/**
+ * Take a screenshot of current page and ave PNG to given path.
+ *
+ * @param  {driver} driver    Current webdriver
+ * @param  {string} storePath
+ * @return {driver}
+ */
+wpAttacker.prototype.takeScreenshot = function(driver, storePath) {
+  driver.takeScreenshot().then(function(data) {
+    var base64Data = data.replace(/^data:image\/png;base64,/,"")
+    fs.writeFileSync(storePath, base64Data, 'base64');
+  });
+  return driver;
+}
 
 module.exports = wpAttacker;

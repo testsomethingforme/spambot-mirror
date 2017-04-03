@@ -5,7 +5,6 @@ var fse = require('fs-extra');
 var path = require('path');
 var nop = require('nop');
 var Command = require('commander').Command;
-var sleep = require('sleep');
 
 var WordPressAttacker = require('../src/attacker').WordPressAttacker;
 var Freeproxylist = require('../src/proxy').Freeproxylist;
@@ -19,7 +18,8 @@ var VERSION = require('../package.json').version;
  *
  * spmabot -h --help
  * spambot -V --version
- * spambot spam <site> -i --interval -v --verbose -d --dirty -m --message
+ * spambot spam <site> -i --interval -v --verbose -d --dirty
+ *                     -m --message -w --webdriver
  * spambot search <site>
  * spambot proxy -n
  */
@@ -105,10 +105,22 @@ program
   .option('-v --verbose', 'Print out detailed spam logs')
   .option('-d --dirty', 'Use dirty words or not in comments')
   .option('-m --message', 'Specify the message in comment')
+  .option('-w --webdriver <webdriver>', 'Specify the webdriver to use')
   .action(function(site, options) {
 
     var url = 'http://' + site;
-    attacker = new WordPressAttacker(url, {}, logger);
+    var attackerOptions = {};
+
+    // Set up webdriver in options for attacker
+    if(options.webdriver && options.webdriver.toLowerCase().includes('phantom')) {
+      Object.assign(attackerOptions, { webdriver: "phantomjs"});
+    }
+    else if(options.webdriver && options.webdriver.toLowerCase().includes('chrome')) {
+      Object.assign(attackerOptions, { webdriver: "chrome"});
+    }
+
+    attacker = new WordPressAttacker(url, attackerOptions, logger);
+
     // Don't send it too fast, otherwise will activate anti-spam mechanism.
     var interval = options.interval || 25000;
     if(interval < 25000) interval = 25000;
